@@ -1,33 +1,31 @@
 import streamlit as st
-from docx import Document
 from openai import OpenAI
+from docx import Document
 
-# --- SETUP ---
+# --- PAGE SETUP ---
 st.set_page_config(page_title="Template-Based Story Generator", layout="wide")
 st.title("📄 Template-Based Business Profile Generator")
 
 # --- INPUTS ---
-owner_name = st.text_input("Owner Name")
+owner_name = st.text_input("Name")
+title = st.text_input("Title")
 company_name = st.text_input("Company Name")
-
-location = st.text_input("Location (optional)")
-industry = st.text_input("Industry (optional)")
+ccib_since = st.text_input("With CCIB since")
 
 template_file = st.file_uploader("Upload Template (.docx)", type=["docx"])
 uploaded_file = st.file_uploader("Upload Interview (.docx)", type=["docx"])
 
 # --- LOAD API KEY FROM SECRETS ---
-try:
-    api_key = st.secrets["OPENAI_API_KEY"]
-except Exception:
-    st.error("Missing API key. Add it to Streamlit secrets.")
+if "OPENAI_API_KEY" not in st.secrets:
+    st.error("Missing API key in Streamlit secrets.")
     st.stop()
 
-# --- FUNCTIONS ---
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
+# --- FUNCTIONS ---
 def extract_text(file):
     doc = Document(file)
-    return "\n".join([p.text.strip() for p in doc.paragraphs if p.text.strip()])
+    return "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
 
 
 def extract_key_points(text):
@@ -37,56 +35,50 @@ def extract_key_points(text):
     keywords = [
         "founded", "started", "experience", "success", "rate",
         "challenge", "problem", "solution", "growth",
-        "partner", "partnership", "client", "relationship",
-        "certification", "inspiration", "why", "how"
+        "partner", "relationship", "worked with",
+        "certification", "inspiration", "client"
     ]
 
     for line in lines:
         for word in keywords:
-            if word in line.lower():
+            if word.lower() in line.lower():
                 important.append(line.strip())
                 break
 
-    return list(dict.fromkeys(important))[:25]
+    return list(set(important))[:20]
 
 
-def generate_story(owner, company, transcript, template_text, location, industry):
-    client = OpenAI(api_key=api_key)
-
+def generate_story(name, title, company, ccib, transcript, template_text):
     prompt = f"""
 You are a professional business writer AND analyst.
 
-Your job:
-Recreate a business profile using the SAME structure, tone, and style as the template.
+GOAL:
+Recreate the business profile using the SAME structure, tone, and style as the template.
 
-BUT:
-- Pull ALL possible details from the transcript
-- Do NOT miss information
-- Expand where appropriate
-- If partnerships or relationships are mentioned → highlight and expand them clearly
+CRITICAL INSTRUCTIONS:
+- Follow template EXACTLY
+- Do NOT skip sections if info exists
+- Extract aggressively from transcript
+- Reword professionally
+- NEVER invent details
+- If truly missing → write: ⚠️ Information not provided
 
-CONTEXT:
-Owner: {owner}
-Company: {company}
-Location: {location}
-Industry: {industry}
+SPECIAL FOCUS:
+- Look carefully for partnerships, collaborations, or organizations mentioned
+- Expand slightly on relationships if present
+- Ensure NOTHING obvious is missed
 
 TEMPLATE:
 {template_text}
 
-TRANSCRIPT:
+INPUT:
 {transcript}
 
-RULES:
-- Follow template EXACTLY
-- Extract EVERYTHING relevant
-- If info exists → USE IT
-- Only use ⚠️ if truly missing
-- Maintain strong professional tone
-
-GOAL:
-Output should feel like the template rewritten using the transcript,
-but MORE complete and detailed.
+BUSINESS INFO:
+Name: {name}
+Title: {title}
+Company: {company}
+With CCIB since: {ccib}
 """
 
     try:
@@ -94,32 +86,31 @@ but MORE complete and detailed.
             model="gpt-4.1-mini",
             input=prompt
         )
-        return response.output[0].content[0].text
+        return response.output_text
     except Exception as e:
         return f"Error: {str(e)}"
 
 
-# --- MAIN ---
-if st.button("Generate Story"):
+# --- VALIDATION ---
+if not template_file or not uploaded_file:
+    st.warning("Please upload both a template and an interview file.")
 
-    if not template_file or not uploaded_file:
-        st.warning("Please upload BOTH a template and interview file.")
-    else:
+# --- MAIN ACTION ---
+if template_file and uploaded_file and owner_name and company_name:
+
+    if st.button("Generate Story"):
         with st.spinner("Generating..."):
 
             template_text = extract_text(template_file)
             transcript = extract_text(uploaded_file)
 
-            st.subheader("📄 Transcript Preview")
-            st.text_area("", transcript[:2000], height=200)
-
             output = generate_story(
                 owner_name,
+                title,
                 company_name,
+                ccib_since,
                 transcript,
-                template_text,
-                location,
-                industry
+                template_text
             )
 
             highlights = extract_key_points(transcript)
@@ -127,5 +118,8 @@ if st.button("Generate Story"):
         st.subheader("Generated Story")
         st.text_area("", output, height=500)
 
-        st.subheader("🔍 Extracted Source Highlights")
-        st.text_area("", "\n".join(highlights), height=200)
+        st.subheader("🔍 Extracted Source Highlights (for verification)")
+        for h in highlights:
+            st.markdown(f"- {h}")
+
+        st.text_area("Source Highlights (copyable)", "\n".join(highlights), height=200)
